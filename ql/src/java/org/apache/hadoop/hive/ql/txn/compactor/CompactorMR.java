@@ -778,10 +778,31 @@ public class CompactorMR {
       LOG.debug("Moving contents of " + tmpLocation.toString() + " to " +
           finalLocation.toString());
 
+      if(!fs.exists(tmpLocation)) {
+        /**
+         * No 'tmpLocation' may happen if job generated created 0 splits, which happens if all
+         * input delta and/or base files were empty or had
+         * only {@link org.apache.orc.impl.OrcAcidUtils#getSideFile(Path)} files.
+         * So make sure the new base/delta is created.
+         */
+        AcidOutputFormat.Options options = new AcidOutputFormat.Options(conf)
+                .writingBase(conf.getBoolean(IS_MAJOR, false))
+                .isCompressed(conf.getBoolean(IS_COMPRESSED, false))
+                .minimumTransactionId(conf.getLong(MIN_TXN, Long.MAX_VALUE))
+                .maximumTransactionId(conf.getLong(MAX_TXN, Long.MIN_VALUE))
+                .bucket(0)
+                .statementId(-1);
+        Path newDeltaDir = AcidUtils.createFilename(finalLocation, options).getParent();
+        LOG.info(context.getJobID() + ": " + tmpLocation +
+                " not found.  Assuming 0 splits.  Creating " + newDeltaDir);
+        fs.mkdirs(newDeltaDir);
+        return;
+      }
+
       FileStatus[] contents = fs.listStatus(tmpLocation);
-      for (int i = 0; i < contents.length; i++) {
-        Path newPath = new Path(finalLocation, contents[i].getPath().getName());
-        fs.rename(contents[i].getPath(), newPath);
+      for (FileStatus fileStatus : contents) {
+        Path newPath = new Path(finalLocation, fileStatus.getPath().getName());
+        fs.rename(fileStatus.getPath(), newPath);
       }
       fs.delete(tmpLocation, true);
     }
