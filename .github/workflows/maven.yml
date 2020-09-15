@@ -25,8 +25,10 @@ jobs:
         restore-keys: ${{ runner.os }}-m2
     - name: Build with Maven
       run: mvn -DskipTests -B package --file pom.xml
+    - name: list
+      run: ls
     - name: Cache
-      run: mkdir staging && cp target/*.jar staging
+      run: mkdir staging && cp ql/target/*.jar staging
     - uses: actions/upload-artifact@v2
       with:
         name: Package
