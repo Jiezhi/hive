@@ -21,6 +21,7 @@ package org.apache.hadoop.hive.ql.io;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.ql.exec.FileSinkOperator.RecordWriter;
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
 import org.apache.hadoop.io.WritableComparable;
@@ -44,12 +45,17 @@ public interface AcidOutputFormat<K extends WritableComparable, V> extends HiveO
     private FileSystem fs;
     private ObjectInspector inspector;
     private boolean writingBase = false;
+    private boolean writingDeleteDelta = false;
     private boolean isCompressed = false;
     private Properties properties;
     private Reporter reporter;
     private long minimumTransactionId;
     private long maximumTransactionId;
-    private int bucket;
+    private String attemptId;
+    /**
+     * actual bucketId (as opposed to bucket property via BucketCodec)
+     */
+    private int bucketId;
     private PrintStream dummyStream = null;
     private boolean oldStyle = false;
     private int recIdCol = -1;  // Column the record identifier is in, -1 indicates no record id
@@ -57,11 +63,25 @@ public interface AcidOutputFormat<K extends WritableComparable, V> extends HiveO
     private int statementId = 0;
     private Path finalDestination;
     /**
+     * todo: link to AcidUtils?
+     */
+    private long visibilityTxnId = 0;
+    private boolean temporary = false;
+
+    private final boolean writeVersionFile;
+
+    /**
      * Create the options object.
      * @param conf Use the given configuration
      */
     public Options(Configuration conf) {
       this.configuration = conf;
+      writeVersionFile = true;
+//      if (conf != null) {
+//        writeVersionFile = HiveConf.getBoolVar(configuration, HiveConf.ConfVars.HIVE_WRITE_ACID_VERSION_FILE);
+//      } else {
+//        writeVersionFile = true;
+//      }
     }
 
     /**
@@ -94,6 +114,16 @@ public interface AcidOutputFormat<K extends WritableComparable, V> extends HiveO
      */
     public Options writingBase(boolean val) {
       this.writingBase = val;
+      return this;
+    }
+
+    /**
+     * Is this writing a delete delta directory?
+     * @param val is this a delete delta file?
+     * @return this
+     */
+    public Options writingDeleteDelta(boolean val) {
+      this.writingDeleteDelta = val;
       return this;
     }
 
@@ -164,7 +194,7 @@ public interface AcidOutputFormat<K extends WritableComparable, V> extends HiveO
      * @return this
      */
     public Options bucket(int bucket) {
-      this.bucket = bucket;
+      this.bucketId = bucket;
       return this;
     }
 
@@ -199,6 +229,11 @@ public interface AcidOutputFormat<K extends WritableComparable, V> extends HiveO
       return this;
     }
 
+    public Options attemptId(String attemptId) {
+      this.attemptId = attemptId;
+      return this;
+    }
+
     /**
      * @since 1.3.0
      * This can be set to -1 to make the system generate old style (delta_xxxx_yyyy) file names.
@@ -223,7 +258,11 @@ public interface AcidOutputFormat<K extends WritableComparable, V> extends HiveO
       this.finalDestination = p;
       return this;
     }
-    
+    public Options visibilityTxnId(long visibilityTxnId) {
+      this.visibilityTxnId = visibilityTxnId;
+      return this;
+    }
+
     public Configuration getConfiguration() {
       return configuration;
     }
@@ -260,8 +299,20 @@ public interface AcidOutputFormat<K extends WritableComparable, V> extends HiveO
       return writingBase;
     }
 
+    public boolean isWritingDeleteDelta() {
+      return writingDeleteDelta;
+    }
+
+    public int getBucketId() {
+      return bucketId;
+    }
+
     public int getBucket() {
-      return bucket;
+      return bucketId;
+    }
+
+    public String getAttemptId() {
+      return attemptId;
     }
 
     public int getRecordIdColumn() {
@@ -280,6 +331,22 @@ public interface AcidOutputFormat<K extends WritableComparable, V> extends HiveO
     }
     public Path getFinalDestination() {
       return finalDestination;
+    }
+    public long getVisibilityTxnId() {
+      return visibilityTxnId;
+    }
+
+    public boolean isWriteVersionFile() {
+      return writeVersionFile;
+    }
+
+    public Options temporary(boolean temporary) {
+      this.temporary = temporary;
+      return this;
+    }
+
+    public boolean isTemporary() {
+      return temporary;
     }
   }
 

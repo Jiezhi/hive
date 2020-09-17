@@ -18,15 +18,13 @@
 
 package org.apache.hadoop.hive.ql.io;
 
+import org.apache.hadoop.fs.*;
 import org.apache.hadoop.hive.metastore.api.DataOperationType;
 import org.apache.hadoop.hive.ql.ErrorMsg;
+import org.apache.hadoop.hive.ql.io.orc.Writer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.PathFilter;
 import org.apache.hadoop.hive.common.ValidTxnList;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.conf.HiveConf.ConfVars;
@@ -39,6 +37,7 @@ import org.apache.hadoop.hive.shims.HadoopShims.HdfsFileStatusWithId;
 import com.google.common.annotations.VisibleForTesting;
 
 import java.io.IOException;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -156,7 +155,7 @@ public class AcidUtils {
     String subdir;
     if (options.getOldStyle()) {
       return new Path(directory, String.format(LEGACY_FILE_BUCKET_DIGITS,
-          options.getBucket()) + "_0");
+          options.getBucketId()) + "_0");
     } else if (options.isWritingBase()) {
       subdir = BASE_PREFIX + String.format(DELTA_DIGITS,
           options.getMaximumTransactionId());
@@ -170,7 +169,7 @@ public class AcidUtils {
         options.getMaximumTransactionId(),
         options.getStatementId());
     }
-    return createBucketFile(new Path(directory, subdir), options.getBucket());
+    return createBucketFile(new Path(directory, subdir), options.getBucketId());
   }
 
   /**
@@ -463,6 +462,57 @@ public class AcidUtils {
       }
     }
     return false;
+  }
+
+  /**
+   * Logic related to versioning acid data format.  An {@code ACID_FORMAT} file is written to each
+   * base/delta/delete_delta dir written by a full acid write or compaction.  This is the primary
+   * mechanism for versioning acid data.
+   *
+   * Each individual ORC file written stores the current version as a user property in ORC footer.
+   * All data files produced by Acid write should have this (starting with Hive 3.0), including
+   * those written by compactor.  This is more for sanity checking in case someone moved the files
+   * around or something like that.
+   *
+   * Methods for getting/reading the version from files were moved to test class TestTxnCommands
+   * which is the only place they are used, in order to keep devs out of temptation, since they
+   * access the FileSystem which is expensive.
+   */
+  public static final class OrcAcidVersion {
+    public static final String ACID_VERSION_KEY = "hive.acid.version";
+    public static final String ACID_FORMAT = "_orc_acid_version";
+    private static final Charset UTF8 = Charset.forName("UTF-8");
+    /**
+     * 2 is the version of Acid released in Hive 3.0.
+     */
+    public static final int ORC_ACID_VERSION = 2;
+    /**
+     * Inlucde current acid version in file footer.
+     * @param writer - file written
+     */
+    public static void setAcidVersionInDataFile(Writer writer) {
+      //so that we know which version wrote the file
+      writer.addUserMetadata(ACID_VERSION_KEY, UTF8.encode(String.valueOf(ORC_ACID_VERSION)));
+    }
+
+    /**
+     * This creates a version file in {@code deltaOrBaseDir}
+     * @param deltaOrBaseDir - where to create the version file
+     */
+    public static void writeVersionFile(Path deltaOrBaseDir, FileSystem fs)  throws IOException {
+      Path formatFile = getVersionFilePath(deltaOrBaseDir);
+      if(!fs.isFile(formatFile)) {
+        try (FSDataOutputStream strm = fs.create(formatFile, false)) {
+          strm.write(UTF8.encode(String.valueOf(ORC_ACID_VERSION)).array());
+        } catch (IOException ioe) {
+          LOG.error("Failed to create " + formatFile + " due to: " + ioe.getMessage(), ioe);
+          throw ioe;
+        }
+      }
+    }
+    public static Path getVersionFilePath(Path deltaOrBase) {
+      return new Path(deltaOrBase, ACID_FORMAT);
+    }
   }
 
   @VisibleForTesting
